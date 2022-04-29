@@ -355,6 +355,10 @@ type Message struct {
 	XXX_sizecache        int32       `json:"-"`
 }
 
+//func (m *Message) String() string {
+//	return fmt.Sprintf("[Type:%v From %v to %v, term is %v, rej is %v, index is %v,logterm is %v]",
+//		m.MsgType,m.From,m.To,m.Term,m.Reject,m.Index,m.LogTerm)
+//}
 func (m *Message) Reset()         { *m = Message{} }
 func (m *Message) String() string { return proto.CompactTextString(m) }
 func (*Message) ProtoMessage()    {}

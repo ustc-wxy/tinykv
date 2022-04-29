@@ -148,6 +148,7 @@ func (ms *MemoryStorage) LastIndex() (uint64, error) {
 }
 
 func (ms *MemoryStorage) lastIndex() uint64 {
+	//DPrintf("[ms debug]len(ms.ents) is %v,%v", len(ms.ents), ms.ents[0])
 	return ms.ents[0].Index + uint64(len(ms.ents)) - 1
 }
 

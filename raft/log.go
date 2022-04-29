@@ -14,7 +14,10 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/pingcap/log"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -50,13 +53,43 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+
 }
 
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return nil
+	lo, _ := storage.FirstIndex()
+	hi, _ := storage.LastIndex()
+	entries, err := storage.Entries(lo, hi+1)
+	if err != nil {
+		panic(err)
+	}
+	//if len(entries) == 0 {
+	//	entries = append(entries, pb.Entry{Index: 0, Term: 0})
+	//}
+	return &RaftLog{storage: storage, entries: entries, applied: lo - 1, stabled: hi}
+}
+
+//Author:sqdbibibi Date:4.28
+func (l *RaftLog) getHigherLog(index uint64) []*pb.Entry {
+	var entries []*pb.Entry
+	n := len(l.entries)
+	for i := l.toSliceIndex(index); i < n; i++ {
+		entries = append(entries, &l.entries[i])
+	}
+	return entries
+}
+
+//Author:sqdbibibi Date:4.28
+func (l *RaftLog) toSliceIndex(logIndex uint64) int {
+	idx := int(logIndex - l.FirstIndex())
+	if idx < 0 {
+		log.Fatal("toSliceIndex err!")
+		return -1
+	}
+	return idx
 }
 
 // We need to compact the log entries in some point of time like
@@ -69,23 +102,60 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
+	if len(l.entries) > 0 {
+		return l.entries[l.stabled-l.FirstIndex()+1:]
+	}
 	return nil
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
+	if len(l.entries) > 0 {
+		return l.entries[l.applied-l.FirstIndex()+1 : l.committed-l.FirstIndex()+1]
+	}
 	return nil
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	res, _ := l.storage.LastIndex()
+	lenEntries := len(l.entries)
+	if lenEntries > 0 {
+		res = max(res, l.entries[lenEntries-1].Index)
+	}
+	return res
+}
+
+//Author:sqdbibibi Data:4.28
+func (l *RaftLog) FirstIndex() uint64 {
+	res, _ := l.storage.FirstIndex()
+	lenEntries := len(l.entries)
+	if lenEntries > 0 {
+		res = max(res, l.entries[0].Index)
+	}
+	return res
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	DPrintf("[Term debug],index is %v,log is %v", i, l.entries)
+	if len(l.entries) > 0 && i >= l.FirstIndex() {
+		return l.entries[i-l.FirstIndex()].Term, nil
+	}
+	term, _ := l.storage.Term(i)
+	return term, nil
+}
+
+//Author:sqdbibibi Date:4.29
+func (l *RaftLog) getLog(index uint64) *pb.Entry {
+	if index == 0 {
+		return &pb.Entry{Index: 0, Term: 0}
+	}
+	if index < l.FirstIndex() || index > l.LastIndex() {
+		return nil
+	}
+	return &l.entries[index-l.FirstIndex()]
 }
