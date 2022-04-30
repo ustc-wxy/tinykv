@@ -193,6 +193,12 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		RaftLog:          newLog(c.Storage),
 	}
+	hardSt, confSt, _ := r.RaftLog.storage.InitialState()
+	// ?
+	if c.peers == nil {
+		c.peers = confSt.Nodes
+	}
+
 	lastIndex := r.RaftLog.LastIndex()
 	for _, i := range c.peers {
 		if i == r.id {
@@ -204,6 +210,10 @@ func newRaft(c *Config) *Raft {
 	r.becomeFollower(0, None)
 	r.randomElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
 	DPrintf("%s is loading..., log content: %v\n", r, r.RaftLog.entries)
+	r.Term, r.Vote, r.RaftLog.committed = hardSt.GetTerm(), hardSt.GetVote(), hardSt.GetCommit()
+	if c.Applied > 0 {
+		r.RaftLog.applied = c.Applied
+	}
 	return r
 }
 
@@ -238,17 +248,17 @@ func (r *Raft) sendAppend(to uint64) bool {
 	return true
 }
 
-//Author:sqdbibibi Date:4.28
-func (r *Raft) sendAppendResponse(to uint64, reject bool, index uint64, term uint64) {
-	DPrintf("%s is send Append Response to Leader\n", r)
+//Author:sqdbibibi Date:4.28-29
+func (r *Raft) sendAppendResponse(to uint64, reject bool, logTerm uint64, index uint64) {
+	DPrintf("%s is send Append Response to Leader,rej=%v,Index=%v\n", r, reject, index)
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      to,
-		Term:    term,
+		Term:    r.Term,
 		Reject:  reject,
 		Index:   index,
-		LogTerm: term,
+		LogTerm: logTerm,
 	}
 	r.msgs = append(r.msgs, msg)
 }
@@ -563,18 +573,21 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.sendAppendResponse(m.From, true, None, lastIndex)
 		return
 	}
+
 	if entry.Term != prevLogTerm {
 		r.sendAppendResponse(m.From, true, entry.Term, prevLogIndex)
 		return
 	}
-	i := prevLogIndex - r.RaftLog.FirstIndex()
-	DPrintf("i-%v %v %v\n", i, m.Index, m.LogTerm)
+
+	i := int(prevLogIndex - r.RaftLog.FirstIndex())
+	DPrintf("Init i:%v CommonEntry is %v\n", i, entry)
 	for _, v := range m.Entries {
 		if v.Index <= entry.Index {
 			continue
 		}
 		i++
-		if v.Index <= lastIndex {
+		DPrintf("[hae debug] i:%v ent:%v\n", i, v)
+		if i < len(r.RaftLog.entries) {
 			if v.Term != r.RaftLog.entries[i].Term {
 				r.RaftLog.entries[i] = *v
 				r.RaftLog.entries = r.RaftLog.entries[0 : i+1]
@@ -583,12 +596,15 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		} else {
 			r.RaftLog.entries = append(r.RaftLog.entries, *v)
 		}
-
+		DPrintf("[hae debug] lenLog is %v,len(log) is %v,Log is %v\n", r.RaftLog.LastIndex(), len(r.RaftLog.entries), r.RaftLog.entries)
 	}
 
 	if m.Commit > r.RaftLog.committed {
-		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+		//r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+		r.RaftLog.committed = min(m.Commit, m.Index+uint64(len(m.Entries)))
+
 	}
+
 	r.sendAppendResponse(m.From, false, None, r.RaftLog.LastIndex())
 }
 
@@ -663,28 +679,29 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 //Author: sqdbibibi Date:4.28
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	DPrintf("%s has received AE response,rej %v,index %v.\n", r, m.Reject, m.Index)
+	DPrintf("%s has received AE response,rej %v,index %v,logterm %v.\n", r, m.Reject, m.Index, m.LogTerm)
 	if m.Term != None && m.Term < r.Term {
 		return
 	}
 	if m.Reject {
-		if m.Index != None {
-			index := m.Index
-			if m.Term != None {
-				for index > r.RaftLog.FirstIndex() {
-					term, _ := r.RaftLog.Term(index)
-					if term == m.Term {
-						index--
-					}
-				}
-			}
-			//snap bug?
-			if index == r.RaftLog.FirstIndex() {
-				index--
-			}
-			r.Prs[m.From].Next = index
-			r.sendAppend(m.From)
-		}
+		//if m.Index != None {
+		//	index := m.Index
+		//	if m.Term != None {
+		//		for index > r.RaftLog.FirstIndex() {
+		//			term, _ := r.RaftLog.Term(index)
+		//			if term == m.Term {
+		//				index--
+		//			}
+		//		}
+		//	}
+		//	//snap bug?
+		//	if index == r.RaftLog.FirstIndex() {
+		//		index--
+		//	}
+
+		r.Prs[m.From].Next--
+		r.sendAppend(m.From)
+		//}
 	} else {
 		if m.Index > r.Prs[m.From].Match {
 			r.Prs[m.From].Next = m.Index + 1
@@ -694,12 +711,11 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 				arr = append(arr, int(v.Match))
 			}
 			sort.Sort(sort.Reverse(sort.IntSlice(arr)))
-			DPrintf("arr is %v\n", arr)
 			majorIndex := uint64(arr[len(arr)/2])
-			DPrintf("%s majorIndex is %v,log is %v\n", r, majorIndex, r.RaftLog.entries)
 			term, _ := r.RaftLog.Term(majorIndex)
 			if term == r.Term && majorIndex > r.RaftLog.committed {
 				r.RaftLog.committed = majorIndex
+				r.broadcastAppend()
 			}
 		}
 
@@ -718,6 +734,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.sendHeartbeatResponse(m.From, false)
 }
 func (r *Raft) handleRequestVote(m pb.Message) {
+	//DPrintf("%s has received requestVote, ori vote is %v.\n", r, r.Vote)
 	if m.Term != None && m.Term < r.Term {
 		r.sendRequestVoteResponse(m.From, true)
 		return
@@ -744,16 +761,19 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 	}
 	r.votes[m.From] = !m.Reject
 	grants := 0
-	//votes := len(r.votes)
-	threshold := (len(r.Prs) + 1) / 2
+	DPrintf("vote arr is %v\n", r.votes)
+	lenVotes := len(r.votes)
+	threshold := len(r.Prs) / 2
 	for _, g := range r.votes {
 		if g {
 			grants++
 		}
 	}
 	DPrintf("%s grants is %v,thd is %v\n", r, grants, threshold)
-	if grants >= threshold {
+	if grants > threshold {
 		r.becomeLeader()
+	} else if lenVotes-grants > threshold {
+		r.becomeFollower(r.Term, None)
 	}
 }
 func (rf *Raft) String() string {

@@ -27,11 +27,10 @@ package raft
 
 import (
 	"fmt"
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"reflect"
 	"sort"
 	"testing"
-
-	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
 func TestFollowerUpdateTermFromMessage2AA(t *testing.T) {
@@ -733,6 +732,7 @@ func TestLeaderSyncFollowerLog2AB(t *testing.T) {
 		},
 	}
 	for i, tt := range tests {
+		DPrintf("Test %v\n", i)
 		leadStorage := NewMemoryStorage()
 		leadStorage.Append(ents)
 		lead := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, leadStorage)

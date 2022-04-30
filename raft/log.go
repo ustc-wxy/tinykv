@@ -63,6 +63,7 @@ func newLog(storage Storage) *RaftLog {
 	lo, _ := storage.FirstIndex()
 	hi, _ := storage.LastIndex()
 	entries, err := storage.Entries(lo, hi+1)
+	storage.InitialState()
 	if err != nil {
 		panic(err)
 	}
@@ -120,11 +121,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	res, _ := l.storage.LastIndex()
 	lenEntries := len(l.entries)
 	if lenEntries > 0 {
-		res = max(res, l.entries[lenEntries-1].Index)
+		return l.entries[lenEntries-1].Index
 	}
+	res, _ := l.storage.LastIndex()
 	return res
 }
 
@@ -141,7 +142,7 @@ func (l *RaftLog) FirstIndex() uint64 {
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	DPrintf("[Term debug],index is %v,log is %v", i, l.entries)
+	//DPrintf("[Term debug],index is %v,log is %v", i, l.entries)
 	if len(l.entries) > 0 && i >= l.FirstIndex() {
 		return l.entries[i-l.FirstIndex()].Term, nil
 	}
@@ -151,6 +152,7 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 
 //Author:sqdbibibi Date:4.29
 func (l *RaftLog) getLog(index uint64) *pb.Entry {
+	//DPrintf("[getlog Debug],index:%v fst:%v lst:%v\n", index, l.FirstIndex(), l.LastIndex())
 	if index == 0 {
 		return &pb.Entry{Index: 0, Term: 0}
 	}

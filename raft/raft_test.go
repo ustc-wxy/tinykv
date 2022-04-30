@@ -87,6 +87,7 @@ func TestLeaderElection2AA(t *testing.T) {
 	}
 
 	for i, tt := range tests {
+		DPrintf("test %v\n", i)
 		tt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 		sm := tt.network.peers[1].(*Raft)
 		if sm.State != tt.state {
@@ -143,6 +144,7 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	// entry overwrites the losers'. (TestLeaderSyncFollowerLog tests
 	// the case where older log entries are overwritten, so this test
 	// focuses on the case where the newer entries are lost).
+	//
 	n := newNetworkWithConfig(cfg,
 		entsWithConfig(cfg, 1),     // Node 1: Won first election
 		entsWithConfig(cfg, 1),     // Node 2: Got logs from node 1
@@ -270,8 +272,9 @@ func TestLogReplication2AB(t *testing.T) {
 			4,
 		},
 	}
-
+	//
 	for i, tt := range tests {
+		DPrintf("test %v\n", i)
 		tt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgHup})
 
 		for _, m := range tt.msgs {
@@ -592,6 +595,7 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
+		DPrintf("test is %v\n", i)
 		storage := NewMemoryStorage()
 		storage.Append([]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}})
 		sm := newTestRaft(1, []uint64{1}, 10, 1, storage)
