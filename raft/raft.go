@@ -178,6 +178,18 @@ type Raft struct {
 	PendingConfIndex uint64
 }
 
+func (r *Raft) softState() *SoftState {
+	return &SoftState{Lead: r.Lead, RaftState: r.State}
+}
+
+func (r *Raft) hardState() pb.HardState {
+	return pb.HardState{
+		Term:   r.Term,
+		Vote:   r.Vote,
+		Commit: r.RaftLog.committed,
+	}
+}
+
 // newRaft return a raft peer with the given config
 func newRaft(c *Config) *Raft {
 
@@ -224,9 +236,10 @@ func (r *Raft) sendAppend(to uint64) bool {
 	DPrintf("%s is send append to %v,log is %v\n", r, to, r.RaftLog.entries)
 	prevLogIndex := r.Prs[to].Next - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIndex)
+
 	if err != nil {
 		if err == ErrCompacted {
-			//r.sendSnapshot(to)
+			r.sendSnapshot(to)
 			return false
 		}
 		panic(err)
@@ -309,6 +322,26 @@ func (r *Raft) sendRequestVoteResponse(to uint64, reject bool) {
 	}
 	r.msgs = append(r.msgs, msg)
 }
+
+//Author:sqdbibibi Date:5.1
+func (r *Raft) sendSnapshot(to uint64) {
+	snapshot, err := r.RaftLog.storage.Snapshot()
+	if err != nil {
+		log.Fatalf("[sendSnapshot] Get snapshot fail.")
+		return
+	}
+	DPrintf("%s is sending snapshot to %v. shotIndex:%v\n", r, to, snapshot.Metadata.Index)
+
+	msg := pb.Message{
+		MsgType:  pb.MessageType_MsgSnapshot,
+		From:     r.id,
+		To:       to,
+		Term:     r.Term,
+		Snapshot: &snapshot,
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 	if r.electionElapsed >= r.randomElectionTimeout {
@@ -344,6 +377,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Vote = None
 	r.Term = term
 	r.Lead = lead
+
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -580,13 +614,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	i := int(prevLogIndex - r.RaftLog.FirstIndex())
-	DPrintf("Init i:%v CommonEntry is %v\n", i, entry)
 	for _, v := range m.Entries {
 		if v.Index <= entry.Index {
 			continue
 		}
 		i++
-		DPrintf("[hae debug] i:%v ent:%v\n", i, v)
 		if i < len(r.RaftLog.entries) {
 			if v.Term != r.RaftLog.entries[i].Term {
 				r.RaftLog.entries[i] = *v
@@ -596,7 +628,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		} else {
 			r.RaftLog.entries = append(r.RaftLog.entries, *v)
 		}
-		DPrintf("[hae debug] lenLog is %v,len(log) is %v,Log is %v\n", r.RaftLog.LastIndex(), len(r.RaftLog.entries), r.RaftLog.entries)
 	}
 
 	if m.Commit > r.RaftLog.committed {
@@ -785,6 +816,29 @@ func (rf *Raft) String() string {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+
+	meta := m.Snapshot.Metadata
+	//
+	if meta.Index <= r.RaftLog.committed {
+		r.sendAppendResponse(m.From, false, None, r.RaftLog.committed)
+		return
+	}
+	r.becomeFollower(max(r.Term, m.Term), m.From)
+	//
+	if len(r.RaftLog.entries) > 0 {
+		r.RaftLog.entries = []pb.Entry{}
+	}
+	r.RaftLog.entries = append(r.RaftLog.entries, pb.Entry{Index: meta.Index, Term: meta.Term})
+	r.RaftLog.includeIndex = meta.Index
+	r.RaftLog.applied = meta.Index
+	r.RaftLog.committed = meta.Index
+	r.RaftLog.stabled = meta.Index
+	r.Prs = make(map[uint64]*Progress)
+	for _, peer := range meta.ConfState.Nodes {
+		r.Prs[peer] = &Progress{}
+	}
+	r.RaftLog.pendingSnapshot = m.Snapshot
+	r.sendAppendResponse(m.From, false, None, r.RaftLog.LastIndex())
 }
 
 // addNode add a new node to raft group
