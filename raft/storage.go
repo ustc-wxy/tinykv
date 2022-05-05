@@ -148,7 +148,6 @@ func (ms *MemoryStorage) LastIndex() (uint64, error) {
 }
 
 func (ms *MemoryStorage) lastIndex() uint64 {
-	//DPrintf("[ms debug]len(ms.ents) is %v,%v", len(ms.ents), ms.ents[0])
 	return ms.ents[0].Index + uint64(len(ms.ents)) - 1
 }
 
@@ -200,6 +199,7 @@ func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte)
 	}
 
 	offset := ms.ents[0].Index
+	//
 	if i > ms.lastIndex() {
 		log.Panicf("snapshot %d is out of bound lastindex(%d)", i, ms.lastIndex())
 	}

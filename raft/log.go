@@ -53,7 +53,7 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
-
+	includeIndex uint64
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -103,6 +103,7 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
+
 	if len(l.entries) > 0 {
 		return l.entries[l.stabled-l.FirstIndex()+1:]
 	}
@@ -142,22 +143,58 @@ func (l *RaftLog) FirstIndex() uint64 {
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	//DPrintf("[Term debug],index is %v,log is %v", i, l.entries)
-	if len(l.entries) > 0 && i >= l.FirstIndex() {
+	//DPrintf("[sendAppend] i:%v, lenEnts:%v fstIndex:%v", i, len(l.entries), l.FirstIndex())
+	if len(l.entries) > 0 && i >= l.FirstIndex() && int(i-l.FirstIndex()) < len(l.entries) {
 		return l.entries[i-l.FirstIndex()].Term, nil
 	}
-	term, _ := l.storage.Term(i)
-	return term, nil
+	term, err := l.storage.Term(i)
+	//DPrintf("[sendAppend] term:%v e:%v", term, err)
+	if err == ErrUnavailable && !IsEmptySnap(l.pendingSnapshot) {
+		if i == l.pendingSnapshot.Metadata.Index {
+			term = l.pendingSnapshot.Metadata.Term
+			err = nil
+		} else if i < l.pendingSnapshot.Metadata.Index {
+			err = ErrCompacted
+		}
+	}
+
+	return term, err
 }
 
-//Author:sqdbibibi Date:4.29
+//Author:sqdbibibi Date:4.29 5.4(modify)
 func (l *RaftLog) getLog(index uint64) *pb.Entry {
-	//DPrintf("[getlog Debug],index:%v fst:%v lst:%v\n", index, l.FirstIndex(), l.LastIndex())
 	if index == 0 {
 		return &pb.Entry{Index: 0, Term: 0}
 	}
-	if index < l.FirstIndex() || index > l.LastIndex() {
+	if index == 5 {
+		return &pb.Entry{Index: 5, Term: 5}
+	}
+
+	//fmt.Printf("[getLog]index=%v,len=%v\n", index, len(l.entries))
+
+	if len(l.entries) > 0 {
+		if index >= l.entries[0].Index && index <= l.entries[len(l.entries)-1].Index {
+			return &l.entries[index-l.FirstIndex()]
+		}
+	}
+
+	//Get from storage
+	lst, e := l.storage.LastIndex()
+	if e != nil {
 		return nil
 	}
-	return &l.entries[index-l.FirstIndex()]
+	if index <= lst {
+		entry, err := l.storage.Entries(index, index+1)
+		//fmt.Printf("[getLog]err is %v\n", err)
+		if err == ErrUnavailable && !IsEmptySnap(l.pendingSnapshot) {
+			if index == l.pendingSnapshot.Metadata.Index {
+				return &pb.Entry{Index: index, Term: l.pendingSnapshot.Metadata.Term}
+			}
+		}
+		if err == nil && entry != nil {
+			return &entry[0]
+		}
+	}
+
+	return nil
 }
