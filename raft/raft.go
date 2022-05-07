@@ -205,13 +205,15 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		RaftLog:          newLog(c.Storage),
 	}
+	//fmt.Printf("id :%v is loading...\n", r.id)
+
 	hardSt, confSt, _ := r.RaftLog.storage.InitialState()
 	// ?
 	if c.peers == nil {
 		c.peers = confSt.Nodes
 	}
 
-	lastIndex := r.RaftLog.LastIndex()
+	lastIndex, _ := r.RaftLog.storage.LastIndex()
 	for _, i := range c.peers {
 		if i == r.id {
 			r.Prs[i] = &Progress{Next: lastIndex + 1, Match: lastIndex}
@@ -221,11 +223,11 @@ func newRaft(c *Config) *Raft {
 	}
 	r.becomeFollower(0, None)
 	r.randomElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
-	DPrintf("%s is loading..., log content: %v\n", r, r.RaftLog.entries)
 	r.Term, r.Vote, r.RaftLog.committed = hardSt.GetTerm(), hardSt.GetVote(), hardSt.GetCommit()
 	if c.Applied > 0 {
 		r.RaftLog.applied = c.Applied
 	}
+
 	return r
 }
 
@@ -235,11 +237,12 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 	prevLogIndex := r.Prs[to].Next - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIndex)
-	DPrintf("%s is send append to %v,prevIndex: %v ,prevTerm: %v, log is %v\n",
-		r, to, prevLogIndex, prevLogTerm, r.RaftLog.entries)
+	DPrintf("%s is send append to %v,prevIndex: %v ,prevTerm: %v\n",
+		r, to, prevLogIndex, prevLogTerm)
 
 	if err != nil {
 		if err == ErrCompacted {
+			DPrintf("%s will sendSnapshot,reqIndex is %d\n", r, prevLogIndex)
 			r.sendSnapshot(to)
 			return false
 		}
@@ -256,8 +259,9 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Index:   prevLogIndex,
 		Entries: entries,
 	}
-	DPrintf("Append msg is finish, from %v to %v,index %v,logterm %v, commited %v,entries %v",
-		msg.From, msg.To, msg.Index, msg.LogTerm, msg.Commit, msg.Entries)
+	DPrintf("Append msg is finish, from %v to %v,index %v,logTerm is %v,len(log) is %v",
+		msg.From, msg.To, msg.Index, msg.LogTerm, len(msg.Entries))
+	//DPrintf("append log is %v",msg.Entries)
 	r.msgs = append(r.msgs, msg)
 	return true
 }
@@ -280,7 +284,7 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool, logTerm uint64, index 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-	DPrintf("%s is send hb to %v\n", r, to)
+	//DPrintf("%s is send hb to %v\n", r, to)
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
@@ -292,7 +296,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 
 //Author:sqdbibibi Date:4.28
 func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	DPrintf("%s will send Heartbeat Response to leader.\n", r)
+	//DPrintf("%s will send Heartbeat Response to leader.\n", r)
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		From:    r.id,
@@ -328,10 +332,9 @@ func (r *Raft) sendRequestVoteResponse(to uint64, reject bool) {
 func (r *Raft) sendSnapshot(to uint64) {
 	snapshot, err := r.RaftLog.storage.Snapshot()
 	if err != nil {
-		//log.Fatalf("[sendSnapshot] Get snapshot fail, err is %v", err)
 		return
 	}
-	DPrintf("%s is sending snapshot to %v. shotIndex:%v\n", r, to, snapshot.Metadata.Index)
+	//DPrintf("%s is sending snapshot to %v. shotIndex:%v\n", r, to, snapshot.Metadata.Index)
 
 	msg := pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
@@ -411,7 +414,7 @@ func (r *Raft) becomeLeader() {
 			r.Prs[i].Match = 0
 		}
 	}
-	DPrintf("%s become a leader,log is %v.\n", r, r.RaftLog.entries)
+	DPrintf("%s become a leader.\n", r)
 	r.heartbeatElapsed = 0
 	r.broadcastAppend()
 	if len(r.Prs) == 1 {
@@ -605,7 +608,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	lastIndex := r.RaftLog.LastIndex()
 	entry := r.RaftLog.getLog(prevLogIndex)
 
-	//fmt.Printf("[handleAE]x1,%s prevIndex:%v entry:%v pdsnap:%v\n", r, prevLogIndex, entry, r.RaftLog.pendingSnapshot)
 	if entry == nil {
 		r.sendAppendResponse(m.From, true, None, lastIndex)
 		return
@@ -668,7 +670,8 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		r.sendAppend(m.From)
 		//}
 	} else {
-		if m.Index > r.Prs[m.From].Match {
+		DPrintf("%s is handle AER from %v,Index is %v, Match is %v, Next is %v\n", r, m.From, m.Index, r.Prs[m.From].Match, r.Prs[m.From].Next)
+		if m.Index > r.Prs[m.From].Match || m.Index > r.Prs[m.From].Next-1 {
 			r.Prs[m.From].Next = m.Index + 1
 			r.Prs[m.From].Match = m.Index
 			var arr []int
@@ -742,15 +745,14 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 	}
 }
 func (rf *Raft) String() string {
-
-	return fmt.Sprintf("[%s:%d;Term:%d;VotedFor:%d;logLen:%v;Commit:%v;Apply:%v]",
-		stateArray[rf.State], rf.id, rf.Term, rf.Vote, len(rf.RaftLog.entries), rf.RaftLog.committed, rf.RaftLog.applied)
+	fst, _ := rf.RaftLog.storage.FirstIndex()
+	return fmt.Sprintf("[%s:%d;Term:%d;VotedFor:%d;logLen:%v;Commit:%v;Apply:%v;Truncated:%v]",
+		stateArray[rf.State], rf.id, rf.Term, rf.Vote, len(rf.RaftLog.entries), rf.RaftLog.committed, rf.RaftLog.applied, fst-1)
 }
 
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	fmt.Printf("[handleSnapshot]%s sp:%v\n", r, m.Snapshot)
 	meta := m.Snapshot.Metadata
 	//
 	if meta.Index <= r.RaftLog.committed {

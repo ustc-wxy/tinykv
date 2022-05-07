@@ -92,7 +92,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 // Author:sqdbibibi Date:5.5 Des:handle proposal for every state.
 func (d *peerMsgHandler) handleProposal(entry *eraftpb.Entry, handle func(*proposal)) {
-
 	for len(d.proposals) > 0 {
 		proposal := d.proposals[0]
 		if entry.Term < proposal.term {
@@ -112,6 +111,7 @@ func (d *peerMsgHandler) handleProposal(entry *eraftpb.Entry, handle func(*propo
 			continue
 		}
 		if entry.Index == proposal.index && entry.Term == proposal.term {
+
 			handle(proposal)
 			d.proposals = d.proposals[1:]
 			return
@@ -136,13 +136,15 @@ func (d *peerMsgHandler) applyNormalRequest(entry *eraftpb.Entry, msg *raft_cmdp
 
 	switch req.CmdType {
 	case raft_cmdpb.CmdType_Put:
-		//fmt.Printf("[cmdPut] cf is %s ,key is %v,val is %s\n", req.Put.GetCf(), req.Put.GetKey(), req.Put.Value)
 		kvWB.SetCF(req.Put.GetCf(), req.Put.GetKey(), req.Put.Value)
 	case raft_cmdpb.CmdType_Get:
 	case raft_cmdpb.CmdType_Delete:
 		kvWB.DeleteCF(req.Delete.GetCf(), req.Delete.GetKey())
 	case raft_cmdpb.CmdType_Snap:
 	}
+	kvWB.WriteToDB(d.peerStorage.Engines.Kv)
+	kvWB = new(engine_util.WriteBatch)
+
 	var err error
 	d.handleProposal(entry, func(p *proposal) {
 		rsp := raft_cmdpb.RaftCmdResponse{Header: &raft_cmdpb.RaftResponseHeader{}}
@@ -172,10 +174,36 @@ func (d *peerMsgHandler) applyNormalRequest(entry *eraftpb.Entry, msg *raft_cmdp
 			panic(err)
 		}
 		kvWB.WriteToDB(d.peerStorage.Engines.Kv)
-		kvWB = new(engine_util.WriteBatch)
 
 		p.cb.Done(&rsp)
 	})
+	kvWB = new(engine_util.WriteBatch)
+	return kvWB
+}
+
+// Author:sqdbibibi Date:5.6
+func (d *peerMsgHandler) applyAdminRequest(entry *eraftpb.Entry, msg *raft_cmdpb.RaftCmdRequest, kvWB *engine_util.WriteBatch) *engine_util.WriteBatch {
+	req := msg.AdminRequest
+	var err error
+	switch req.CmdType {
+	case raft_cmdpb.AdminCmdType_CompactLog:
+		applySt := d.peerStorage.applyState
+		compactLog := msg.AdminRequest.GetCompactLog()
+		if applySt.TruncatedState.Index <= compactLog.CompactIndex {
+			applySt.TruncatedState.Index = compactLog.CompactIndex
+			applySt.TruncatedState.Term = compactLog.CompactTerm
+			applySt.AppliedIndex = entry.Index
+			kvWB, err = d.peerStorage.SetApplystate(d.peerStorage.applyState, kvWB)
+			if err != nil {
+				panic(err)
+			}
+
+			d.ScheduleCompactLog(d.peerStorage.applyState.TruncatedState.Index)
+		}
+
+	}
+	kvWB.MustWriteToDB(d.peerStorage.Engines.Kv)
+	kvWB = new(engine_util.WriteBatch)
 	return kvWB
 }
 
@@ -191,7 +219,7 @@ func (d *peerMsgHandler) applyEntry(entry *eraftpb.Entry, kvWB *engine_util.Writ
 			kvWB = d.applyNormalRequest(entry, msg, kvWB)
 		}
 	} else {
-		//d.applyAdminRequest(msg, kvWB)
+		kvWB = d.applyAdminRequest(entry, msg, kvWB)
 	}
 	return kvWB
 }
@@ -269,6 +297,7 @@ func getRequestKey(req *raft_cmdpb.Request) []byte {
 	}
 	return key
 }
+
 func (d *peerMsgHandler) proposeNormalRequest(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	key := getRequestKey(msg.Requests[0])
 	if key != nil {
@@ -286,6 +315,24 @@ func (d *peerMsgHandler) proposeNormalRequest(msg *raft_cmdpb.RaftCmdRequest, cb
 	d.proposals = append(d.proposals, p)
 	d.RaftGroup.Propose(data)
 }
+
+// Author:sqdbibibi Date:5.6
+func (d *peerMsgHandler) proposeAdminRequest(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
+	req := msg.AdminRequest
+	switch req.CmdType {
+	case raft_cmdpb.AdminCmdType_CompactLog:
+		data, err := msg.Marshal()
+		if err != nil {
+			panic(err)
+		}
+		//p := &proposal{index: d.nextProposalIndex(), term: d.Term(), cb: cb}
+		//d.proposals = append(d.proposals, p)
+		//
+		d.RaftGroup.Propose(data)
+
+	}
+
+}
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	//DPrintf("[proposeRaftCommand] storeID: %v, regionId: %v, reqType:%v\n", d.peer.storeID(), d.peer.regionId, msg.Requests[0].CmdType)
 	err := d.preProposeRaftCommand(msg)
@@ -300,7 +347,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 			d.proposeNormalRequest(msg, cb)
 		}
 	} else {
-		//d.proposeAdminRequest()
+		d.proposeAdminRequest(msg, cb)
 	}
 
 }
