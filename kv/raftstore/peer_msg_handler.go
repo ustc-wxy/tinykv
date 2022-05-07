@@ -319,17 +319,21 @@ func (d *peerMsgHandler) proposeNormalRequest(msg *raft_cmdpb.RaftCmdRequest, cb
 // Author:sqdbibibi Date:5.6
 func (d *peerMsgHandler) proposeAdminRequest(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	req := msg.AdminRequest
+	data, err := msg.Marshal()
+	if err != nil {
+		panic(err)
+	}
 	switch req.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
-		data, err := msg.Marshal()
-		if err != nil {
-			panic(err)
-		}
+
 		//p := &proposal{index: d.nextProposalIndex(), term: d.Term(), cb: cb}
 		//d.proposals = append(d.proposals, p)
 		//
 		d.RaftGroup.Propose(data)
-
+	case raft_cmdpb.AdminCmdType_TransferLeader:
+		transferee := msg.AdminRequest.TransferLeader.Peer
+		d.RaftGroup.TransferLeader(transferee.GetId())
+		//cb.Done
 	}
 
 }

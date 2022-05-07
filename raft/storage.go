@@ -131,7 +131,7 @@ func (ms *MemoryStorage) Term(i uint64) (uint64, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
-	DPrintf("[Term]offset:%v ms.ents:%v", offset, ms.ents)
+	//DPrintf("[Term]offset:%v ms.ents:%v", offset, ms.ents)
 	if i < offset {
 		return 0, ErrCompacted
 	}

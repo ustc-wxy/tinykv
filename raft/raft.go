@@ -23,7 +23,7 @@ import (
 	"sort"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -162,6 +162,7 @@ type Raft struct {
 	// valid message from current leader when it is a follower.
 	electionElapsed int
 
+	transferElapsed int
 	// leadTransferee is id of the leader transfer target when its value is not zero.
 	// Follow the procedure defined in section 3.10 of Raft phd thesis.
 	// (https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
@@ -205,10 +206,10 @@ func newRaft(c *Config) *Raft {
 		electionTimeout:  c.ElectionTick,
 		RaftLog:          newLog(c.Storage),
 	}
-	//fmt.Printf("id :%v is loading...\n", r.id)
+	DPrintf("id :%v is loading...\n", r.id)
 
 	hardSt, confSt, _ := r.RaftLog.storage.InitialState()
-	// ?
+
 	if c.peers == nil {
 		c.peers = confSt.Nodes
 	}
@@ -346,6 +347,17 @@ func (r *Raft) sendSnapshot(to uint64) {
 	r.msgs = append(r.msgs, msg)
 }
 
+// Author:sqdbibibi Date:5.7
+func (r *Raft) sendTimeoutNow(to uint64) {
+	DPrintf("%s send TimeoutNow to %v\n", r, to)
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgTimeoutNow,
+		From:    r.id,
+		To:      to,
+		//Term:    r.Term,
+	}
+	r.msgs = append(r.msgs, msg)
+}
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 	if r.electionElapsed >= r.randomElectionTimeout {
@@ -361,6 +373,15 @@ func (r *Raft) tickHeartBeat() {
 	}
 }
 
+// Author:sqdbibibi Date:5.7
+func (r *Raft) tickTransfer() {
+	r.transferElapsed++
+	if r.transferElapsed >= 2*r.electionTimeout {
+		r.transferElapsed = 0
+		r.leadTransferee = None
+	}
+}
+
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
@@ -370,6 +391,9 @@ func (r *Raft) tick() {
 	case StateCandidate:
 		r.tickElection()
 	case StateLeader:
+		if r.leadTransferee != None {
+			r.tickTransfer()
+		}
 		r.tickHeartBeat()
 	}
 }
@@ -426,7 +450,12 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+
+	if _, ok := r.Prs[r.id]; !ok && m.MsgType == pb.MessageType_MsgTimeoutNow {
+		return nil
+	}
 	if m.Term > r.Term {
+		r.leadTransferee = None
 		r.becomeFollower(m.Term, None)
 	}
 	switch r.State {
@@ -522,20 +551,32 @@ func (r *Raft) stepLeader(m pb.Message) error {
 	case pb.MessageType_MsgHeartbeatResponse:
 		r.sendAppend(m.From)
 	case pb.MessageType_MsgTransferLeader:
-		//r.handleTransferLeader(m)
+		r.handleTransferLeader(m)
 	case pb.MessageType_MsgTimeoutNow:
 	}
 	return nil
 }
 
-//Author:sqdbibibi Date:4.29
+// Author:sqdbibibi Date:4.29
 func (r *Raft) start(ents []*pb.Entry) {
 	DPrintf("%s receive new commands,size is %v,lastIndex is %v.\n", r, len(ents), r.RaftLog.LastIndex())
+
+	if r.leadTransferee != None {
+		DPrintf("%s is leaderTransfering now,skip the new commands.\n", r)
+		return
+	}
 	lastIndex := r.RaftLog.LastIndex()
 	for i, entry := range ents {
 		entry.Index = lastIndex + uint64(i+1)
 		entry.Term = r.Term
 
+		if entry.EntryType == pb.EntryType_EntryConfChange {
+			if r.PendingConfIndex == None {
+				r.PendingConfIndex = entry.Index
+			} else {
+				continue
+			}
+		}
 		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 	}
 	r.Prs[r.id].Match = r.RaftLog.LastIndex()
@@ -618,13 +659,21 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 	}
 
-	i := int(prevLogIndex - r.RaftLog.FirstIndex())
+	//i := int(prevLogIndex - r.RaftLog.FirstIndex())
+	var fst uint64
+	if len(r.RaftLog.entries) > 0 {
+		fst = r.RaftLog.entries[0].Index
+	} else {
+		fst = 0
+	}
+	i := int(prevLogIndex - fst)
+
 	for _, v := range m.Entries {
 		if v.Index <= entry.Index {
 			continue
 		}
 		i++
-		if i < len(r.RaftLog.entries) {
+		if i >= 0 && i < len(r.RaftLog.entries) {
 			if v.Term != r.RaftLog.entries[i].Term {
 				r.RaftLog.entries[i] = *v
 				r.RaftLog.entries = r.RaftLog.entries[0 : i+1]
@@ -651,21 +700,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		return
 	}
 	if m.Reject {
-		//if m.Index != None {
-		//	index := m.Index
-		//	if m.Term != None {
-		//		for index > r.RaftLog.FirstIndex() {
-		//			term, _ := r.RaftLog.Term(index)
-		//			if term == m.Term {
-		//				index--
-		//			}
-		//		}
-		//	}
-		//	//snap bug?
-		//	if index == r.RaftLog.FirstIndex() {
-		//		index--
-		//	}
-
 		r.Prs[m.From].Next--
 		r.sendAppend(m.From)
 		//}
@@ -685,6 +719,12 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 				r.RaftLog.committed = majorIndex
 				r.broadcastAppend()
 			}
+
+			if m.From == r.leadTransferee && m.Index == r.RaftLog.LastIndex() {
+				r.sendTimeoutNow(m.From)
+				r.leadTransferee = None
+			}
+
 		}
 
 	}
@@ -779,12 +819,68 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	r.sendAppendResponse(m.From, false, None, r.RaftLog.LastIndex())
 }
 
+// Author:sqdbibibi Date:5.7
+func (r *Raft) handleTransferLeader(m pb.Message) {
+	if r.State != StateLeader || r.Lead != r.id {
+		return
+	}
+	if m.From == r.id {
+		return
+	}
+	if r.leadTransferee != None && r.leadTransferee == m.From {
+		return
+	}
+	if _, ok := r.Prs[m.From]; !ok {
+		return
+	}
+	transfereeId := m.From
+	r.leadTransferee = transfereeId
+	r.transferElapsed = 0
+
+	if r.Prs[transfereeId].Match == r.RaftLog.LastIndex() {
+		r.sendTimeoutNow(transfereeId)
+	} else {
+		r.sendAppend(transfereeId)
+	}
+}
+
+// Author:sqdbibibi Date:5.7
+//func (r *Raft) handleTimeoutNow(m pb.Message) {
+//	if m.Term != None && m.Term < r.Term {
+//		return
+//	}
+//	r.doElection()
+//}
+
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
+	if _, ok := r.Prs[id]; !ok {
+		r.Prs[id] = &Progress{Match: 0, Next: r.RaftLog.LastIndex()}
+	}
+	r.PendingConfIndex = None
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+	if _, ok := r.Prs[id]; ok {
+		delete(r.Prs, id)
+	}
+	r.PendingConfIndex = None
+
+	var arr []int
+	for _, v := range r.Prs {
+		arr = append(arr, int(v.Match))
+	}
+	if len(arr) == 0 {
+		return
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(arr)))
+	majorIndex := uint64(arr[len(arr)/2])
+	term, _ := r.RaftLog.Term(majorIndex)
+	if term == r.Term && majorIndex > r.RaftLog.committed {
+		r.RaftLog.committed = majorIndex
+		r.broadcastAppend()
+	}
 }
