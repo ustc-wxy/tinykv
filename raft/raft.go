@@ -243,7 +243,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 	if err != nil {
 		if err == ErrCompacted {
-			DPrintf("%s will sendSnapshot,reqIndex is %d\n", r, prevLogIndex)
+			DPrintf("%s will send Snapshot,reqIndex is %d\n", r, prevLogIndex)
 			r.sendSnapshot(to)
 			return false
 		}
@@ -260,8 +260,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Index:   prevLogIndex,
 		Entries: entries,
 	}
-	DPrintf("Append msg is finish, from %v to %v,index %v,logTerm is %v,len(log) is %v",
-		msg.From, msg.To, msg.Index, msg.LogTerm, len(msg.Entries))
+	DPrintf("Append msg is finish, from %v to %v,index %v,logTerm is %v,log is %v",
+		msg.From, msg.To, msg.Index, msg.LogTerm, msg.Entries)
 	//DPrintf("append log is %v",msg.Entries)
 	r.msgs = append(r.msgs, msg)
 	return true
@@ -450,7 +450,6 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-
 	if _, ok := r.Prs[r.id]; !ok && m.MsgType == pb.MessageType_MsgTimeoutNow {
 		return nil
 	}
@@ -653,7 +652,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.sendAppendResponse(m.From, true, None, lastIndex)
 		return
 	} else {
-		if entry.Term != prevLogTerm {
+		if entry.Term != None && entry.Term != prevLogTerm {
 			r.sendAppendResponse(m.From, true, entry.Term, prevLogIndex)
 			return
 		}
@@ -793,6 +792,7 @@ func (rf *Raft) String() string {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+	DPrintf("%s handle Snapshot,index is %v.\n", r, m.Snapshot.Metadata.Index)
 	meta := m.Snapshot.Metadata
 	//
 	if meta.Index <= r.RaftLog.committed {
@@ -855,6 +855,7 @@ func (r *Raft) handleTransferLeader(m pb.Message) {
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
+	DPrintf("%s add node %v.\n", r, id)
 	if _, ok := r.Prs[id]; !ok {
 		r.Prs[id] = &Progress{Match: 0, Next: r.RaftLog.LastIndex()}
 	}
@@ -864,6 +865,7 @@ func (r *Raft) addNode(id uint64) {
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+	DPrintf("%s remove node %v.\n", r, id)
 	if _, ok := r.Prs[id]; ok {
 		delete(r.Prs, id)
 	}

@@ -2,6 +2,7 @@ package raftstore
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"time"
 
@@ -110,6 +111,7 @@ func (bs *Raftstore) loadPeers() ([]*peer, error) {
 	// Scan region meta to get saved regions.
 	startKey := meta.RegionMetaMinKey
 	endKey := meta.RegionMetaMaxKey
+	//fmt.Printf("[loadPeers]sK is %v,eK is %v\n", startKey, endKey)
 	ctx := bs.ctx
 	kvEngine := ctx.engine.Kv
 	storeID := ctx.store.Id
@@ -147,6 +149,7 @@ func (bs *Raftstore) loadPeers() ([]*peer, error) {
 				return errors.WithStack(err)
 			}
 			region := localState.Region
+			fmt.Printf("[loadPeers]region is %v,sk is %v,ek is %v\n", region, region.StartKey, region.EndKey)
 			if localState.State == rspb.PeerState_Tombstone {
 				tombStoneCount++
 				bs.clearStaleMeta(kvWB, raftWB, localState)

@@ -130,9 +130,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	if len(l.entries) > 0 {
 		lb := l.applied - l.entries[0].Index + 1
 		rb := l.committed - l.entries[0].Index + 1
-		//if lb > rb || int(rb) >= len(l.entries) {
-		//	return nil
-		//}
+		//fmt.Printf("[nextEnts]lb is %v,rb is %v\n", lb, rb)
 		return l.entries[lb:rb]
 	}
 	return nil
@@ -167,11 +165,10 @@ func (l *RaftLog) Term(index uint64) (uint64, error) {
 
 //Author:sqdbibibi Date:4.29 5.4(modify)
 func (l *RaftLog) getLog(index uint64) *pb.Entry {
-	if index == 0 {
-		return &pb.Entry{Index: 0, Term: 0}
-	}
-	if index == 5 {
-		return &pb.Entry{Index: 5, Term: 5}
+	fstIdx, _ := l.storage.FirstIndex()
+	trucatedIdx := fstIdx - 1
+	if index == trucatedIdx {
+		return &pb.Entry{Index: index, Term: None}
 	}
 
 	if localLog := l.getLocal(index); localLog != nil {

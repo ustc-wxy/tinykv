@@ -370,13 +370,19 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 	// Author:sqdbibibi Date:5.4
+	fmt.Printf("[applySnap] sK is %v,eK is %v,ps.region is %v.\n", snapData.Region.StartKey, snapData.Region.EndKey, ps.region)
 
-	//if ps.isInitialized() {
-	//	if err := ps.clearMeta(kvWB, raftWB); err != nil {
-	//		return nil, err
-	//	}
-	//	ps.clearExtraData(snapData.Region)
-	//}
+	if ps.isInitialized() {
+		fmt.Printf("[applySnap]y0\n")
+
+		if err := ps.clearMeta(kvWB, raftWB); err != nil {
+			return nil, err
+		}
+		fmt.Printf("[applySnap]y1\n")
+
+		ps.clearExtraData(snapData.Region)
+	}
+
 	ps.snapState.StateType = snap.SnapState_Applying
 	ps.raftState.LastIndex = snapshot.Metadata.Index
 	ps.raftState.LastTerm = snapshot.Metadata.Term
@@ -386,6 +392,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 
 	ps.SetRaftstate(ps.raftState, raftWB)
 	ps.SetApplystate(ps.applyState, kvWB)
+	fmt.Printf("[applySnap]before, sK is %v,eK is %v\n", ps.region.StartKey, ps.region.EndKey)
 
 	// schedule snapshot apply task
 	ch := make(chan bool, 1)
@@ -397,7 +404,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		EndKey:   snapData.Region.GetEndKey(),
 	}
 	<-ch
-
+	fmt.Printf("[applySnap]after, sK is %v,eK is %v\n", ps.region.StartKey, ps.region.EndKey)
 	res := &ApplySnapResult{PrevRegion: ps.region, Region: snapData.Region}
 
 	kvWB.MustWriteToDB(ps.Engines.Kv)

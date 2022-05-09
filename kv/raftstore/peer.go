@@ -356,6 +356,19 @@ func (p *peer) HeartbeatScheduler(ch chan<- worker.Task) {
 	}
 }
 
+//func (d *peerMsgHandler) notifyHeartbeatScheduler(region *metapb.Region, peer *peer) {
+//	clonedRegion := new(metapb.Region)
+//	err := util.CloneMsg(region, clonedRegion)
+//	if err != nil {
+//		return
+//	}
+//	d.ctx.schedulerTaskSender <- &runner.SchedulerRegionHeartbeatTask{
+//		Region:          clonedRegion,
+//		Peer:            peer.Meta,
+//		PendingPeers:    peer.CollectPendingPeers(),
+//		ApproximateSize: peer.ApproximateSize,
+//	}
+//}
 func (p *peer) sendRaftMessage(msg eraftpb.Message, trans Transport) error {
 	sendMsg := new(rspb.RaftMessage)
 	sendMsg.RegionId = p.regionId
