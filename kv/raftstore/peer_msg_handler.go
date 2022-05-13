@@ -52,13 +52,14 @@ func newPeerMsgHandler(peer *peer, ctx *GlobalContext) *peerMsgHandler {
 
 //Author:sqdbibibi Date:5.4 Des:After applySnap, region may change.
 func (d *peerMsgHandler) handleRegionChange(prevRegion *metapb.Region, region *metapb.Region) {
+	fmt.Printf("[handleRegionChange]prevRegion: %v region: %v", prevRegion, region)
+	d.peerStorage.SetRegion(region)
 	storeMeta := d.ctx.storeMeta
 	storeMeta.Lock()
 	defer storeMeta.Unlock()
 	storeMeta.regions[region.Id] = region
 	storeMeta.regionRanges.Delete(&regionItem{prevRegion})
 	storeMeta.regionRanges.ReplaceOrInsert(&regionItem{region})
-
 }
 
 func (d *peerMsgHandler) HandleRaftReady() {
@@ -77,8 +78,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 				d.handleRegionChange(res.PrevRegion, res.Region)
 			}
 		}
+		//fmt.Printf("[handleRaftReady]%srd.msgs is %v\n", d.RaftGroup.Raft, rd.Messages)
 		d.Send(d.ctx.trans, rd.Messages)
-		fmt.Printf("%s is ready,comEntries is %v.\n", d.RaftGroup.Raft, rd.CommittedEntries)
 		if len(rd.CommittedEntries) > 0 {
 
 			kvWB := new(engine_util.WriteBatch)
@@ -94,7 +95,16 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 // Author:sqdbibibi Date:5.5 Des:handle proposal for every state.
 func (d *peerMsgHandler) handleProposal(entry *eraftpb.Entry, handle func(*proposal)) {
+	tries := 0
 	for len(d.proposals) > 0 {
+		tries++
+		if tries >= 10 {
+			panic("try 10 times")
+		}
+		fmt.Printf("[handleProposal] r is %v idx %v,term %v,len(ps) %v\n", d.RaftGroup.Raft, entry.Index, entry.Term, len(d.proposals))
+		for idx, v := range d.proposals {
+			fmt.Printf("%v:%v", idx, v)
+		}
 		proposal := d.proposals[0]
 		if entry.Term < proposal.term {
 			return
@@ -115,10 +125,18 @@ func (d *peerMsgHandler) handleProposal(entry *eraftpb.Entry, handle func(*propo
 		if entry.Index == proposal.index && entry.Term == proposal.term {
 
 			handle(proposal)
+			// Author:sqdbibibi Date:5.12 Des:delete same proposals.
+			for len(d.proposals) > 1 {
+				if proposal.index == d.proposals[1].index && proposal.term == d.proposals[1].term {
+					d.proposals = d.proposals[1:]
+				} else {
+					break
+				}
+			}
 			d.proposals = d.proposals[1:]
+
 			return
 		}
-
 	}
 }
 
@@ -155,7 +173,7 @@ func (d *peerMsgHandler) applyNormalRequest(entry *eraftpb.Entry, msg *raft_cmdp
 
 		switch req.CmdType {
 		case raft_cmdpb.CmdType_Put:
-			DPrintf("%s is making response.\n", d.RaftGroup.Raft)
+			DPrintf("%s is making PUT response.\n", d.RaftGroup.Raft)
 			rsp.Responses = []*raft_cmdpb.Response{{CmdType: raft_cmdpb.CmdType_Put, Put: &raft_cmdpb.PutResponse{}}}
 		case raft_cmdpb.CmdType_Get:
 			val, e := engine_util.GetCF(d.peerStorage.Engines.Kv, req.Get.GetCf(), req.Get.Key)
@@ -183,6 +201,8 @@ func (d *peerMsgHandler) applyNormalRequest(entry *eraftpb.Entry, msg *raft_cmdp
 		p.cb.Done(&rsp)
 	})
 	kvWB = new(engine_util.WriteBatch)
+	DPrintf("%s apply for %v Request finish.\n", d.RaftGroup.Raft, msg.Requests[0].CmdType)
+
 	return kvWB
 }
 
@@ -237,6 +257,7 @@ func (d *peerMsgHandler) applyConfChangeRequest(entry *eraftpb.Entry, cc eraftpb
 		})
 		return kvWB
 	}
+	fmt.Printf("[applyConfChange ###%v] r is %v\n", cc.GetChangeType(), d.RaftGroup.Raft)
 	switch cc.ChangeType {
 	case eraftpb.ConfChangeType_AddNode:
 		idx := searchPeerInRegion(cc.NodeId, region)
@@ -255,9 +276,31 @@ func (d *peerMsgHandler) applyConfChangeRequest(entry *eraftpb.Entry, cc eraftpb
 
 	case eraftpb.ConfChangeType_RemoveNode:
 		if cc.NodeId == d.Meta.Id {
+			if len(d.Region().Peers) == 2 && d.IsLeader() {
+				var targetPeer uint64 = 0
+				for _, peer := range d.Region().Peers {
+					if peer.Id != d.PeerId() {
+						targetPeer = peer.Id
+						break
+					}
+				}
+				if targetPeer == 0 {
+					panic("This should not happen")
+				}
+				m := []eraftpb.Message{{
+					To:      targetPeer,
+					MsgType: eraftpb.MessageType_MsgHeartbeat,
+					Commit:  d.peerStorage.raftState.HardState.Commit,
+				}}
+				for i := 0; i < 10; i++ {
+					d.Send(d.ctx.trans, m)
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
 			d.destroyPeer()
 			return kvWB
 		}
+
 		idx := searchPeerInRegion(cc.NodeId, region)
 		if idx < len(region.Peers) {
 			region.Peers = append(region.Peers[:idx], region.Peers[idx+1:]...)
@@ -284,7 +327,7 @@ func (d *peerMsgHandler) applyConfChangeRequest(entry *eraftpb.Entry, cc eraftpb
 			},
 		})
 	})
-
+	d.notifyHeartbeatScheduler(d.Region(), d.peer)
 	if d.IsLeader() {
 		d.HeartbeatScheduler(d.ctx.schedulerTaskSender)
 	}
@@ -415,7 +458,6 @@ func (d *peerMsgHandler) proposeNormalRequest(msg *raft_cmdpb.RaftCmdRequest, cb
 
 // Author:sqdbibibi Date:5.6 5.8
 func (d *peerMsgHandler) proposeAdminRequest(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	DPrintf("%s propose %v AdminRequest.\n", d.RaftGroup.Raft, msg.AdminRequest.CmdType)
 	req := msg.AdminRequest
 	data, err := msg.Marshal()
 	if err != nil {
@@ -434,6 +476,7 @@ func (d *peerMsgHandler) proposeAdminRequest(msg *raft_cmdpb.RaftCmdRequest, cb 
 				TransferLeader: &raft_cmdpb.TransferLeaderResponse{},
 			},
 		})
+		DPrintf("%s propose %v AdminRequest, transferee is %v\n", d.RaftGroup.Raft, msg.AdminRequest.CmdType, transferee)
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 		confChange := eraftpb.ConfChange{
 			ChangeType: req.ChangePeer.ChangeType,
@@ -715,7 +758,7 @@ func (d *peerMsgHandler) checkSnapshot(msg *rspb.RaftMessage) (*snap.SnapKey, er
 }
 
 func (d *peerMsgHandler) destroyPeer() {
-	log.Infof("%s starts destroy", d.Tag)
+	log.Infof("%s starts destroy, raft is %v", d.Tag, d.RaftGroup.Raft)
 	regionID := d.regionId
 	// We can't destroy a peer which is applying snapshot.
 	meta := d.ctx.storeMeta

@@ -61,6 +61,7 @@ func (m *storeMeta) setRegion(region *metapb.Region, peer *peer) {
 
 // getOverlaps gets the regions which are overlapped with the specified region range.
 func (m *storeMeta) getOverlapRegions(region *metapb.Region) []*metapb.Region {
+	fmt.Printf("[getOverlapRegions]sk is %v,ek is %v\n", region.StartKey, region.EndKey)
 	item := &regionItem{region: region}
 	var result *regionItem
 	// find is a helper function to find an item that contains the regions start key.
@@ -133,7 +134,8 @@ func (bs *Raftstore) loadPeers() ([]*peer, error) {
 			}
 			regionID, suffix, err := meta.DecodeRegionMetaKey(item.Key())
 			if err != nil {
-				return err
+				continue
+				//return err
 			}
 			if suffix != meta.RegionStateSuffix {
 				continue
@@ -149,7 +151,7 @@ func (bs *Raftstore) loadPeers() ([]*peer, error) {
 				return errors.WithStack(err)
 			}
 			region := localState.Region
-			fmt.Printf("[loadPeers]region is %v,sk is %v,ek is %v\n", region, region.StartKey, region.EndKey)
+			fmt.Printf("[loadPeers]region is %v\n", region)
 			if localState.State == rspb.PeerState_Tombstone {
 				tombStoneCount++
 				bs.clearStaleMeta(kvWB, raftWB, localState)

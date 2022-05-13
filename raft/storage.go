@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
 	"sync"
 
 	"github.com/pingcap-incubator/tinykv/log"
@@ -68,6 +69,8 @@ type Storage interface {
 	// so raft state machine could know that Storage needs some time to prepare
 	// snapshot and call Snapshot later.
 	Snapshot() (pb.Snapshot, error)
+
+	GetInfo() *rspb.RaftApplyState
 }
 
 // MemoryStorage implements the Storage interface backed by an

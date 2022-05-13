@@ -216,12 +216,13 @@ func (p *peer) Destroy(engine *engine_util.Engines, keepData bool) error {
 	if err := raftWB.WriteToDB(engine.Raft); err != nil {
 		return err
 	}
-
+	fmt.Printf("[Destory]R0 ps.region:%v kpData:%v\n", p.peerStorage.region, keepData)
 	if p.peerStorage.isInitialized() && !keepData {
 		// If we meet panic when deleting data and raft log, the dirty data
 		// will be cleared by a newer snapshot applying or restart.
 		p.peerStorage.ClearData()
 	}
+	fmt.Printf("[Destory]R1\n")
 
 	for _, proposal := range p.proposals {
 		NotifyReqRegionRemoved(region.Id, proposal.cb)
@@ -343,6 +344,7 @@ func (p *peer) Term() uint64 {
 }
 
 func (p *peer) HeartbeatScheduler(ch chan<- worker.Task) {
+	fmt.Println("[HeartbeatScheduler]is executing...")
 	clonedRegion := new(metapb.Region)
 	err := util.CloneMsg(p.Region(), clonedRegion)
 	if err != nil {
@@ -356,19 +358,19 @@ func (p *peer) HeartbeatScheduler(ch chan<- worker.Task) {
 	}
 }
 
-//func (d *peerMsgHandler) notifyHeartbeatScheduler(region *metapb.Region, peer *peer) {
-//	clonedRegion := new(metapb.Region)
-//	err := util.CloneMsg(region, clonedRegion)
-//	if err != nil {
-//		return
-//	}
-//	d.ctx.schedulerTaskSender <- &runner.SchedulerRegionHeartbeatTask{
-//		Region:          clonedRegion,
-//		Peer:            peer.Meta,
-//		PendingPeers:    peer.CollectPendingPeers(),
-//		ApproximateSize: peer.ApproximateSize,
-//	}
-//}
+func (d *peerMsgHandler) notifyHeartbeatScheduler(region *metapb.Region, peer *peer) {
+	clonedRegion := new(metapb.Region)
+	err := util.CloneMsg(region, clonedRegion)
+	if err != nil {
+		return
+	}
+	d.ctx.schedulerTaskSender <- &runner.SchedulerRegionHeartbeatTask{
+		Region:          clonedRegion,
+		Peer:            peer.Meta,
+		PendingPeers:    peer.CollectPendingPeers(),
+		ApproximateSize: peer.ApproximateSize,
+	}
+}
 func (p *peer) sendRaftMessage(msg eraftpb.Message, trans Transport) error {
 	sendMsg := new(rspb.RaftMessage)
 	sendMsg.RegionId = p.regionId

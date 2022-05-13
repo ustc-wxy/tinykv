@@ -18,12 +18,13 @@ import (
 	"errors"
 	"fmt"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	"log"
 	"math/rand"
 	"sort"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -238,9 +239,9 @@ func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 	prevLogIndex := r.Prs[to].Next - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIndex)
-	DPrintf("%s is send append to %v,prevIndex: %v ,prevTerm: %v\n",
-		r, to, prevLogIndex, prevLogTerm)
-
+	DPrintf("%s is send append to %v,prevIndex: %v ,prevTerm: %v Prs: %v\n",
+		r, to, prevLogIndex, prevLogTerm, r.Prs)
+	//DPrintf("%s term is %v, err is %v\n", r, prevLogTerm, err)
 	if err != nil {
 		if err == ErrCompacted {
 			DPrintf("%s will send Snapshot,reqIndex is %d\n", r, prevLogIndex)
@@ -260,8 +261,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Index:   prevLogIndex,
 		Entries: entries,
 	}
-	DPrintf("Append msg is finish, from %v to %v,index %v,logTerm is %v,log is %v",
-		msg.From, msg.To, msg.Index, msg.LogTerm, msg.Entries)
+	DPrintf("Append msg is finish, from %v to %v,index %v,logTerm is %v,len(log) is %v",
+		msg.From, msg.To, msg.Index, msg.LogTerm, len(msg.Entries))
 	//DPrintf("append log is %v",msg.Entries)
 	r.msgs = append(r.msgs, msg)
 	return true
@@ -285,7 +286,7 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool, logTerm uint64, index 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-	//DPrintf("%s is send hb to %v\n", r, to)
+	DPrintf("%s is send hb to %v\n", r, to)
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeat,
 		From:    r.id,
@@ -335,7 +336,7 @@ func (r *Raft) sendSnapshot(to uint64) {
 	if err != nil {
 		return
 	}
-	//DPrintf("%s is sending snapshot to %v. shotIndex:%v\n", r, to, snapshot.Metadata.Index)
+	DPrintf("%s is sending snapshot to %v. shotIndex:%v\n", r, to, snapshot.Metadata.Index)
 
 	msg := pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
@@ -367,6 +368,7 @@ func (r *Raft) tickElection() {
 }
 func (r *Raft) tickHeartBeat() {
 	r.heartbeatElapsed++
+	DPrintf("%shbElapsed is %v,hbTimeout is %v\n", r, r.heartbeatElapsed, r.heartbeatTimeout)
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
 		r.heartbeatElapsed = 0
 		r.Step(pb.Message{MsgType: pb.MessageType_MsgBeat})
@@ -385,6 +387,7 @@ func (r *Raft) tickTransfer() {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	//fmt.Printf("%s is alive\n", r)
 	switch r.State {
 	case StateFollower:
 		r.tickElection()
@@ -424,6 +427,7 @@ func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	r.State = StateLeader
 	r.Lead = r.id
+	r.heartbeatElapsed = 0
 	lastIndex := r.RaftLog.LastIndex()
 	// NOTE: Leader should propose a noop entry on its term
 	noopEntry := pb.Entry{Term: r.Term, Index: lastIndex + 1}
@@ -548,6 +552,7 @@ func (r *Raft) stepLeader(m pb.Message) error {
 	case pb.MessageType_MsgHeartbeat:
 		r.handleHeartbeat(m)
 	case pb.MessageType_MsgHeartbeatResponse:
+		DPrintf("%s has recv HBR from %v,will send append.\n", r, m.From)
 		r.sendAppend(m.From)
 	case pb.MessageType_MsgTransferLeader:
 		r.handleTransferLeader(m)
@@ -558,8 +563,17 @@ func (r *Raft) stepLeader(m pb.Message) error {
 
 // Author:sqdbibibi Date:4.29
 func (r *Raft) start(ents []*pb.Entry) {
-	DPrintf("%s receive new commands,size is %v,lastIndex is %v.\n", r, len(ents), r.RaftLog.LastIndex())
-
+	DPrintf("%s receive new commands,size is %v,lastIndex is %v,", r, len(ents), r.RaftLog.LastIndex())
+	{
+		msg := &raft_cmdpb.RaftCmdRequest{}
+		msg.Unmarshal(ents[0].Data)
+		if msg.AdminRequest != nil {
+			fmt.Printf("command is %v\n", msg.AdminRequest.CmdType)
+		}
+		if msg.Requests != nil {
+			fmt.Printf("command is %v\n", msg.Requests[0].CmdType)
+		}
+	}
 	if r.leadTransferee != None {
 		DPrintf("%s is leaderTransfering now,skip the new commands.\n", r)
 		return
@@ -596,7 +610,7 @@ func (r *Raft) doElection() {
 	r.becomeCandidate()
 	r.heartbeatElapsed = 0
 	r.randomElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
-	DPrintf("%s do an election.\n", r)
+	DPrintf("%s do an election,Prs is %v\n", r, r.Prs)
 	if len(r.Prs) == 1 {
 		r.becomeLeader()
 		return
@@ -694,16 +708,33 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 //Author: sqdbibibi Date:4.28
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	DPrintf("%s has received AE response,rej %v,index %v,logterm %v.\n", r, m.Reject, m.Index, m.LogTerm)
+	if m.Reject {
+		DPrintf("%s has received AER from %v, reject!", r, m.From)
+	} else {
+		DPrintf("%s has received AER from %v, accept! Index is %v, Match is %v, Next is %v\n", r, m.From, m.Index, r.Prs[m.From].Match, r.Prs[m.From].Next)
+	}
 	if m.Term != None && m.Term < r.Term {
 		return
 	}
 	if m.Reject {
-		r.Prs[m.From].Next--
-		r.sendAppend(m.From)
+		//nextIndex := r.Prs[m.From].Next
+		//for nextIndex > 1 {
+		//	nextIndex--
+		//	if nextIndex <= r.RaftLog.FirstIndex() {
+		//		break
+		//	}
+		//	term, err := r.RaftLog.Term(nextIndex - 1)
+		//	if err != nil || m.LogTerm == term {
+		//		break
+		//	}
 		//}
+		//r.Prs[m.From].Next = nextIndex
+		if r.Prs[m.From].Next > 1 {
+			r.Prs[m.From].Next--
+		}
+		r.sendAppend(m.From)
+
 	} else {
-		DPrintf("%s is handle AER from %v,Index is %v, Match is %v, Next is %v\n", r, m.From, m.Index, r.Prs[m.From].Match, r.Prs[m.From].Next)
 		if m.Index > r.Prs[m.From].Match || m.Index > r.Prs[m.From].Next-1 {
 			r.Prs[m.From].Next = m.Index + 1
 			r.Prs[m.From].Match = m.Index
@@ -732,6 +763,7 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	DPrintf("%s recv hb from leader %v\n", r, m.From)
 	if r.Term != None && r.Term > m.Term {
 		r.sendHeartbeatResponse(m.From, true)
 	}
@@ -741,7 +773,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.sendHeartbeatResponse(m.From, false)
 }
 func (r *Raft) handleRequestVote(m pb.Message) {
-	//DPrintf("%s has received requestVote, ori vote is %v.\n", r, r.Vote)
+	DPrintf("%s has received requestVote, ori vote is %v.\n", r, r.Vote)
 	if m.Term != None && m.Term < r.Term {
 		r.sendRequestVoteResponse(m.From, true)
 		return
@@ -785,8 +817,13 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 }
 func (rf *Raft) String() string {
 	fst, _ := rf.RaftLog.storage.FirstIndex()
-	return fmt.Sprintf("[%s:%d;Term:%d;VotedFor:%d;logLen:%v;Commit:%v;Apply:%v;Truncated:%v]",
-		stateArray[rf.State], rf.id, rf.Term, rf.Vote, len(rf.RaftLog.entries), rf.RaftLog.committed, rf.RaftLog.applied, fst-1)
+	var prs []uint64
+	for k, _ := range rf.Prs {
+		prs = append(prs, k)
+	}
+	return fmt.Sprintf("[%s:%d;Term:%d;Vote:%d;logLen:%v;Commit:%v;Apply:%v;Truncated:%v;Prs:%v;ApSt:%v]",
+		stateArray[rf.State], rf.id, rf.Term, rf.Vote, len(rf.RaftLog.entries), rf.RaftLog.committed, rf.RaftLog.applied, fst-1, prs, rf.RaftLog.storage.GetInfo())
+
 }
 
 // handleSnapshot handle Snapshot RPC request
@@ -821,6 +858,7 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 
 // Author:sqdbibibi Date:5.7
 func (r *Raft) handleTransferLeader(m pb.Message) {
+	DPrintf("%s is handle transferLeader.\n", r)
 	if r.State != StateLeader || r.Lead != r.id {
 		return
 	}
@@ -855,17 +893,19 @@ func (r *Raft) handleTransferLeader(m pb.Message) {
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
-	DPrintf("%s add node %v.\n", r, id)
+	fmt.Printf("%s add node %v.\n", r, id)
 	if _, ok := r.Prs[id]; !ok {
 		r.Prs[id] = &Progress{Match: 0, Next: r.RaftLog.LastIndex()}
 	}
 	r.PendingConfIndex = None
+
+	r.sendHeartbeat(id)
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
-	DPrintf("%s remove node %v.\n", r, id)
+	DPrintf("%s remove node %v start.\n", r, id)
 	if _, ok := r.Prs[id]; ok {
 		delete(r.Prs, id)
 	}
@@ -885,4 +925,6 @@ func (r *Raft) removeNode(id uint64) {
 		r.RaftLog.committed = majorIndex
 		r.broadcastAppend()
 	}
+	DPrintf("%s remove node %v finish.\n", r, id)
+
 }
