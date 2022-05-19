@@ -46,7 +46,7 @@ var (
 // cluster 2 -> /2/raft
 // For cluster 1
 // store 1 -> /1/raft/s/1, value is metapb.Store
-// region 1 -> /1/raft/r/1, value is metapb.Region
+// Region 1 -> /1/raft/r/1, value is metapb.Region
 type RaftCluster struct {
 	sync.RWMutex
 	ctx context.Context
@@ -279,7 +279,36 @@ func (c *RaftCluster) handleStoreHeartbeat(stats *schedulerpb.StoreStats) error 
 // processRegionHeartbeat updates the region information.
 func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	// Your Code Here (3C).
+	// Author:sqdbibibi Date:5.19
+	prevRegion := c.GetRegion(region.GetID())
 
+	regionEpoch := region.GetRegionEpoch()
+
+	if regionEpoch == nil {
+		return errors.Errorf("[processRegionHeartBeat]regionEpoch is empty.")
+	}
+	if prevRegion != nil {
+		prevRegionEpoch := prevRegion.GetRegionEpoch()
+		if prevRegionEpoch != nil {
+			if regionEpoch.ConfVer < prevRegionEpoch.ConfVer || regionEpoch.Version < prevRegionEpoch.Version {
+				return errors.Errorf("[[processRegionHeartBeat]]regionEpoch is stale.")
+			}
+		}
+	} else {
+		//todo
+		for _, r := range c.ScanRegions(region.GetStartKey(), region.GetEndKey(), -1) {
+			rEpoch := r.GetRegionEpoch()
+			if rEpoch != nil {
+				if regionEpoch.ConfVer < rEpoch.ConfVer || regionEpoch.Version < rEpoch.Version {
+					return errors.Errorf("[[processRegionHeartBeat]]regionEpoch is stale.")
+				}
+			}
+		}
+	}
+	c.putRegion(region)
+	for id := range region.GetStoreIds() {
+		c.updateStoreStatusLocked(id)
+	}
 	return nil
 }
 

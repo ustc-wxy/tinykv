@@ -280,7 +280,7 @@ func (r *RegionInfo) GetRegionEpoch() *metapb.RegionEpoch {
 	return r.meta.RegionEpoch
 }
 
-// regionMap wraps a map[uint64]*core.RegionInfo and supports randomly pick a region.
+// -regionMap wraps a map[uint64]*core.RegionInfo and supports randomly pick a region.
 type regionMap struct {
 	m         map[uint64]*RegionInfo
 	totalSize int64
@@ -335,7 +335,7 @@ func (rm *regionMap) TotalSize() int64 {
 	return rm.totalSize
 }
 
-// regionSubTree is used to manager different types of regions.
+// -regionSubTree is used to manager different types of regions.
 type regionSubTree struct {
 	*regionTree
 	totalSize int64
@@ -776,7 +776,7 @@ func HexRegionKey(key []byte) []byte {
 }
 
 // RegionToHexMeta converts a region meta's keys to hex format. Used for formating
-// region in logs.
+// -region in logs.
 func RegionToHexMeta(meta *metapb.Region) HexRegionMeta {
 	if meta == nil {
 		return HexRegionMeta{}
@@ -797,7 +797,7 @@ func (h HexRegionMeta) String() string {
 }
 
 // RegionsToHexMeta converts regions' meta keys to hex format. Used for formating
-// region in logs.
+// -region in logs.
 func RegionsToHexMeta(regions []*metapb.Region) HexRegionsMeta {
 	hexRegionMetas := make([]*metapb.Region, len(regions))
 	for i, region := range regions {
@@ -811,7 +811,7 @@ func RegionsToHexMeta(regions []*metapb.Region) HexRegionsMeta {
 }
 
 // HexRegionsMeta is a slice of regions' meta in the hex format. Used for formating
-// region in logs.
+// -region in logs.
 type HexRegionsMeta []*metapb.Region
 
 func (h HexRegionsMeta) String() string {

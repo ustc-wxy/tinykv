@@ -344,7 +344,7 @@ func (p *peer) Term() uint64 {
 }
 
 func (p *peer) HeartbeatScheduler(ch chan<- worker.Task) {
-	fmt.Println("[HeartbeatScheduler]is executing...")
+	//fmt.Println("[HeartbeatScheduler]is executing...")
 	clonedRegion := new(metapb.Region)
 	err := util.CloneMsg(p.Region(), clonedRegion)
 	if err != nil {
